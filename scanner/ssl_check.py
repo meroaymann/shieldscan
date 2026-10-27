@@ -1,8 +1,17 @@
+"""
+SSL/TLS inspection.
+
+Connects to the already-validated IP (not the hostname again, to avoid DNS rebinding)
+and checks: HTTPS support, certificate trust (expiry, self-signed, hostname match),
+days until expiry, and the TLS version. Trusted roots come from certifi, so results
+are the same on Windows and Linux.
+"""
 import socket
 import ssl
-import certifi
+import warnings
 from datetime import datetime, timezone
 
+import certifi
 
 TIMEOUT = 6
 
@@ -24,6 +33,7 @@ def _connect(ip, host, port, verify):
         sock.close()
         raise
 
+
 def _connect_retry(ip, host, port, verify):
     try:
         return _connect(ip, host, port, verify)
@@ -33,6 +43,34 @@ def _connect_retry(ip, host, port, verify):
         raise                                     # real answers from the server, no retry
     except OSError:
         return _connect(ip, host, port, verify)  # one retry for timeouts / resets
+
+
+def _legacy_tls_version(ip, host, port):
+    """Reconnect allowing TLS 1.0/1.1, ONLY to learn which version an old server uses.
+    No data is exchanged on this connection, so its weak encryption doesn't matter."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # Python warns about TLSv1 itself
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.minimum_version = ssl.TLSVersion.TLSv1
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+        with socket.create_connection((ip, port), timeout=TIMEOUT) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                return ssock.version()
+    except (OSError, ValueError):  # ssl.SSLError is an OSError
+        return None
+
+
+def _read_tls_version(ip, host, port):
+    """TLS version without verifying the certificate (modern first, then legacy)."""
+    try:
+        with _connect(ip, host, port, verify=False) as ssock:
+            return ssock.version()
+    except OSError:
+        return _legacy_tls_version(ip, host, port)
+
 
 def _tls_version_finding(version):
     if version == "TLSv1.3":
@@ -59,6 +97,7 @@ def _connection_problem(port, https_reached, error):
 
 
 def check_ssl(target, https_reached=False):
+    """Returns (findings, info). info feeds the SSL/TLS card on the dashboard."""
     host = target["host"]
     port = target["port"] if target["scheme"] == "https" else 443
     ip = next((i for i in target["ips"] if ":" not in i), target["ips"][0])  # prefer IPv4
@@ -73,19 +112,15 @@ def check_ssl(target, https_reached=False):
 
     except ssl.SSLCertVerificationError as e:
         info["https"] = True
-        reason = e.verify_message or "the certificate couldn't be verified"
+        reason = (e.verify_message or "the certificate couldn't be verified").rstrip(".")
         findings.append(_finding(
             "SSL certificate is not trusted", "high",
             f"Browsers will show a security warning to visitors. Reason: {reason}.",
             "Install a valid certificate from a trusted authority (e.g. Let's Encrypt) "
             "that matches the domain and isn't expired."))
-        # Reconnect without verification just to read the TLS version
-        try:
-            with _connect(ip, host, port, verify=False) as ssock:
-                info["tls_version"] = ssock.version()
+        info["tls_version"] = _read_tls_version(ip, host, port)
+        if info["tls_version"]:
             findings.append(_tls_version_finding(info["tls_version"]))
-        except (OSError, ssl.SSLError):
-            pass
         return findings, info
 
     except ssl.SSLEOFError as e:
@@ -95,10 +130,15 @@ def check_ssl(target, https_reached=False):
 
     except ssl.SSLError:
         info["https"] = True
-        findings.append(_finding(
-            "TLS handshake failed", "high",
-            "The server's TLS setup couldn't be negotiated securely. It may only support outdated TLS versions or weak ciphers.",
-            "Enable TLS 1.2 and TLS 1.3 with modern cipher suites."))
+        legacy = _legacy_tls_version(ip, host, port)
+        if legacy in ("TLSv1", "TLSv1.1"):
+            info["tls_version"] = legacy
+            findings.append(_tls_version_finding(legacy))  # the real reason: outdated TLS
+        else:
+            findings.append(_finding(
+                "TLS handshake failed", "high",
+                "The server's TLS setup couldn't be negotiated securely. It may only support weak ciphers.",
+                "Enable TLS 1.2 and TLS 1.3 with modern cipher suites."))
         return findings, info
 
     except OSError as e:

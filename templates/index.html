@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ShieldScan – Website Security Scanner</title>
+  <meta name="description" content="ShieldScan checks a website's security headers, SSL/TLS and common misconfigurations, then gives a security score with clear fixes.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
@@ -15,14 +17,14 @@
   <header class="navbar">
     <div class="container nav-inner">
       <a href="/" class="logo"><span class="logo-icon">🛡️</span><span>Shield<span class="accent">Scan</span></span></a>
-      <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode">🌙</button>
+      <button type="button" id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode">🌙</button>
     </div>
   </header>
 
   <main>
     <section class="hero">
       <div class="container">
-        <span class="badge">Passive · Safe · Non-intrusive</span>
+        <span class="badge">Safe · Non-intrusive · Educational</span>
         <h1>Check your website's <span class="accent">security</span> in seconds</h1>
         <p class="subtitle">
           ShieldScan checks security headers, SSL/TLS and common misconfigurations,
@@ -32,7 +34,7 @@
         <form id="scanForm" class="scan-card" novalidate>
           <div class="input-row">
             <span class="input-prefix">🌐</span>
-            <input type="text" id="urlInput" placeholder="example.com"
+            <input type="text" id="urlInput" placeholder="example.com" maxlength="2048" inputmode="url"
                    autocomplete="off" spellcheck="false" aria-label="Website URL">
             <button type="submit" id="scanBtn" class="btn-primary">
               <span class="btn-text">Scan</span>
@@ -65,7 +67,7 @@
       <div class="summary-grid">
         <div class="card score-card">
           <div class="gauge">
-            <svg viewBox="0 0 120 120">
+            <svg viewBox="0 0 120 120" aria-hidden="true">
               <circle class="gauge-bg" cx="60" cy="60" r="52"/>
               <circle class="gauge-fill" id="gaugeFill" cx="60" cy="60" r="52"/>
             </svg>
@@ -91,15 +93,18 @@
         </div>
       </div>
 
-      <!-- NEW: charts -->
       <div class="card charts-card">
         <div>
           <h3>Results breakdown</h3>
-          <div class="chart-wrap"><canvas id="severityChart"></canvas></div>
+          <div class="chart-wrap">
+            <canvas id="severityChart" role="img" aria-label="Doughnut chart of findings by severity"></canvas>
+          </div>
         </div>
         <div>
           <h3>Issues vs passed per category</h3>
-          <div class="chart-wrap"><canvas id="categoryChart"></canvas></div>
+          <div class="chart-wrap">
+            <canvas id="categoryChart" role="img" aria-label="Bar chart of issues and passed checks per category"></canvas>
+          </div>
         </div>
       </div>
 
@@ -156,13 +161,16 @@
 
   <footer class="footer">
     <div class="container">
-      <p>⚠️ Only scan websites you own or have permission to test. ShieldScan runs passive checks only.</p>
+      <p>⚠️ For educational and authorized testing only. Scan only websites you own or have permission to test.
+         ShieldScan runs non-intrusive checks and never exploits vulnerabilities.</p>
       <p class="muted">Built by Amira Ayman · Sqrock IT Solutions Internship</p>
     </div>
   </footer>
 
-  <!-- NEW: Chart.js (must load before main.js) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Chart.js (loads before main.js). integrity = SRI hash: the browser refuses the file if it was changed -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"
+          integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"
+          crossorigin="anonymous"></script>
   <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

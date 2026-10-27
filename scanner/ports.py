@@ -1,9 +1,17 @@
+"""
+Light port check (local version only).
+
+Opens a plain TCP connection to 10 commonly exposed risky ports on the validated IP.
+No banners are read and nothing is sent, so it only learns "open" or "closed".
+It's disabled online (ENABLE_PORT_CHECK=0 on Vercel) to keep the public scanner non-intrusive.
+"""
 import os
 import socket
 from concurrent.futures import ThreadPoolExecutor
 
 TIMEOUT = 1.5
 ENABLED = os.getenv("ENABLE_PORT_CHECK", "1") == "1"
+FIREWALL_THRESHOLD = 8  # if this many ports "answer", a firewall is probably accepting everything
 
 DB_DESC = "This database port is reachable from the internet, so attackers can try to log in or exploit it."
 DB_FIX = "Block this port in the firewall and only allow access from your application server."
@@ -42,11 +50,12 @@ def _is_open(ip, port):
 
 
 def check_ports(target):
+    """Returns (findings, info). info lists which ports were checked and which are open."""
     info = {"enabled": ENABLED, "checked": list(PORTS), "open": []}
 
     if not ENABLED:
         return [_finding("Port check is turned off", "info",
-                         "To keep the online version fully passive, the port check only runs locally.")], info
+                         "To keep the online version non-intrusive, the port check only runs locally.")], info
 
     ip = next((i for i in target["ips"] if ":" not in i), target["ips"][0])  # the IP we already validated
     ports = list(PORTS)
@@ -54,6 +63,14 @@ def check_ports(target):
         states = list(pool.map(lambda p: _is_open(ip, p), ports))
 
     info["open"] = [p for p, is_open in zip(ports, states) if is_open]
+
+    # A firewall/tarpit that accepts every connection would make every port look open
+    if len(info["open"]) >= FIREWALL_THRESHOLD:
+        return [_finding(
+            "Port results aren't reliable", "info",
+            f"{len(info['open'])} of {len(ports)} ports accepted a connection. This usually means a firewall "
+            "or anti-scan system answers on every port, so the real services can't be identified.",
+            "Check open ports from inside your network, or review your firewall rules directly.")], info
 
     findings = []
     for port in info["open"]:

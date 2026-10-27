@@ -1,7 +1,33 @@
-// ---------- Dark mode ----------
+/*
+ * ShieldScan frontend
+ * - Sends the URL to POST /scan and renders the results dashboard
+ * - Security: every value from the scanned site is inserted with textContent (never innerHTML),
+ *   so a malicious website can't inject HTML/JS into this page (XSS)
+ * - Bonuses: dark mode, Chart.js statistics, CSV export (with formula-injection protection), PDF via print
+ */
+
+// ---------- State ----------
+const SEVERITIES = ["high", "medium", "low", "info", "pass"];
+const SEV_LABEL = { high: "High", medium: "Medium", low: "Low", info: "Info", pass: "Passed" };
+const GAUGE_LENGTH = 326.73;   // 2 * PI * r (r = 52)
+const SCAN_TIMEOUT_MS = 60000; // give up if the server doesn't answer in 60s
+
+let currentData = null;     // last scan result (used by charts, CSV and PDF)
+let currentFindings = [];
+let charts = [];
+let printState = null;
+
+// ---------- Elements ----------
 const root = document.documentElement;
 const themeToggle = document.getElementById("themeToggle");
+const form = document.getElementById("scanForm");
+const urlInput = document.getElementById("urlInput");
+const authCheck = document.getElementById("authCheck");
+const scanBtn = document.getElementById("scanBtn");
+const formError = document.getElementById("formError");
+const results = document.getElementById("results");
 
+// ---------- Dark mode ----------
 function applyTheme(theme) {
   if (theme === "dark") root.dataset.theme = "dark";
   else delete root.dataset.theme;
@@ -13,18 +39,11 @@ applyTheme(root.dataset.theme === "dark" ? "dark" : "light");
 themeToggle.addEventListener("click", () => {
   const next = root.dataset.theme === "dark" ? "light" : "dark";
   applyTheme(next);
-  if (currentData) renderCharts(currentData); // NEW: redraw charts in the new colors
+  if (currentData) renderCharts(currentData); // redraw charts in the new colors
   try { localStorage.setItem("theme", next); } catch (e) {}
 });
 
 // ---------- Scan form ----------
-const form = document.getElementById("scanForm");
-const urlInput = document.getElementById("urlInput");
-const authCheck = document.getElementById("authCheck");
-const scanBtn = document.getElementById("scanBtn");
-const formError = document.getElementById("formError");
-const results = document.getElementById("results");
-
 function showError(msg) {
   formError.textContent = msg;
   formError.hidden = false;
@@ -36,6 +55,7 @@ function hideError() {
 
 function setLoading(on) {
   scanBtn.disabled = on;
+  scanBtn.setAttribute("aria-busy", on ? "true" : "false");
   scanBtn.querySelector(".btn-text").textContent = on ? "Scanning..." : "Scan";
   scanBtn.querySelector(".spinner").hidden = !on;
 }
@@ -51,11 +71,15 @@ form.addEventListener("submit", async (e) => {
   setLoading(true);
   results.hidden = true;
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
+
   try {
     const res = await fetch("/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, authorized: true }),
+      signal: controller.signal,
     });
 
     let data;
@@ -72,22 +96,16 @@ form.addEventListener("submit", async (e) => {
 
     renderResults(data);
   } catch (err) {
-    showError(err instanceof TypeError
-      ? "Couldn't reach the server. Check your connection and try again."
-      : err.message);
+    if (err.name === "AbortError") showError("The scan took too long. Please try again.");
+    else if (err instanceof TypeError) showError("Couldn't reach the server. Check your connection and try again.");
+    else showError(err.message);
   } finally {
+    clearTimeout(timer);
     setLoading(false);
   }
 });
 
 // ---------- Results dashboard ----------
-const SEVERITIES = ["high", "medium", "low", "info", "pass"];
-const SEV_LABEL = { high: "High", medium: "Medium", low: "Low", info: "Info", pass: "Passed" };
-const GAUGE_LENGTH = 326.73; // 2 * PI * r (r = 52)
-let currentFindings = [];
-let currentData = null;
-let charts = [];
-
 // Builds elements with textContent only: scanned sites can't inject HTML into our page
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -108,7 +126,6 @@ function levelFor(score) {
 }
 
 function renderResults(data) {
-  // NEW: save the data + scan time for the CSV / PDF reports
   currentData = data;
   data.scannedAt = new Date().toLocaleString();
   document.getElementById("scannedUrl").textContent = `${data.final_url} · scanned ${data.scannedAt}`;
@@ -118,7 +135,7 @@ function renderResults(data) {
   renderCounts(data.counts);
   renderCategories(data.categories);
   renderSSL(data.ssl);
-  renderCharts(data); // NEW
+  renderCharts(data);
   currentFindings = data.findings;
   setFilter("all");
 
@@ -185,6 +202,7 @@ function renderSSL(ssl) {
   );
 }
 
+// ---------- Findings + filters ----------
 const FILTERS = {
   all: () => true,
   issues: (f) => f.severity !== "pass",
@@ -229,11 +247,12 @@ document.getElementById("filters").addEventListener("click", (e) => {
 
 document.getElementById("newScanBtn").addEventListener("click", () => {
   results.hidden = true;
+  hideError();
   window.scrollTo({ top: 0, behavior: "smooth" });
   urlInput.select();
 });
 
-// ---------- NEW: Charts (Chart.js) ----------
+// ---------- Charts (Chart.js) ----------
 function cssVar(name) {
   return getComputedStyle(root).getPropertyValue(name).trim();
 }
@@ -289,7 +308,7 @@ function renderCharts(data, animate = true) {
   ];
 }
 
-// ---------- NEW: CSV export ----------
+// ---------- CSV export ----------
 function csvCell(value) {
   let s = String(value ?? "");
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // block spreadsheet formula injection
@@ -322,9 +341,7 @@ function downloadCSV() {
 
 document.getElementById("csvBtn").addEventListener("click", downloadCSV);
 
-// ---------- NEW: PDF (print) ----------
-let printState = null;
-
+// ---------- PDF (print) ----------
 window.addEventListener("beforeprint", () => {
   printState = {
     filter: document.querySelector(".filter.active")?.dataset.filter || "all",

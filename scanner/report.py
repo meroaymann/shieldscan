@@ -1,9 +1,20 @@
+"""
+Security score and report.
+
+Method:
+  - Start at 100 and subtract a penalty per finding:
+      high -15, medium -8, low -3, info/pass 0
+  - Any HIGH finding caps the score at 74 (max Grade C): a site with a critical
+    problem (e.g. no HTTPS, untrusted certificate) shouldn't get an A or B.
+  - Grade: A 90+, B 80+, C 70+, D 60+, F below 60
+  - Category score: how many checks in that category passed, weighted by severity
+"""
 SEVERITY_ORDER = ["high", "medium", "low", "info", "pass"]
 CATEGORY_ORDER = ["Headers", "SSL/TLS", "Misconfiguration", "Ports"]
 
 PENALTY = {"high": 15, "medium": 8, "low": 3, "info": 0, "pass": 0}
-# For category scores: how much each result "fails" (info isn't scored)
-WEIGHT = {"high": 1.0, "medium": 0.6, "low": 0.3, "pass": 0.0}
+WEIGHT = {"high": 1.0, "medium": 0.6, "low": 0.3, "pass": 0.0}  # for category scores (info isn't scored)
+HIGH_SEVERITY_CAP = 74
 
 GRADES = [
     (90, "A", "Excellent! This website follows most security best practices."),
@@ -20,6 +31,11 @@ def _grade(score):
             return grade, summary
 
 
+def _severity_rank(finding):
+    sev = finding.get("severity")
+    return SEVERITY_ORDER.index(sev) if sev in SEVERITY_ORDER else len(SEVERITY_ORDER)
+
+
 def _category_score(items):
     scored = [f for f in items if f["severity"] in WEIGHT]
     if not scored:
@@ -29,16 +45,24 @@ def _category_score(items):
 
 
 def build_report(findings):
-    findings = sorted(findings, key=lambda f: SEVERITY_ORDER.index(f["severity"]))
+    findings = sorted(findings, key=_severity_rank)
 
     counts = {s: 0 for s in SEVERITY_ORDER}
     for f in findings:
-        counts[f["severity"]] += 1
+        if f["severity"] in counts:
+            counts[f["severity"]] += 1
 
-    score = max(0, 100 - sum(PENALTY[f["severity"]] for f in findings))
+    score = max(0, 100 - sum(PENALTY.get(f["severity"], 0) for f in findings))
+    capped = counts["high"] > 0 and score > HIGH_SEVERITY_CAP
+    if capped:
+        score = HIGH_SEVERITY_CAP
+
     grade, summary = _grade(score)
+    if capped:
+        summary += " The grade is capped at C because of a high-severity issue."
 
-    names = [c for c in CATEGORY_ORDER if any(f["category"] == c for f in findings)]
+    present = {f["category"] for f in findings}
+    names = [c for c in CATEGORY_ORDER if c in present] + sorted(present - set(CATEGORY_ORDER))
     categories = []
     for name in names:
         items = [f for f in findings if f["category"] == name]

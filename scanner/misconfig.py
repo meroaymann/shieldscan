@@ -1,12 +1,27 @@
+"""
+Common security misconfigurations.
+
+  1. Technology/version leaks  (Server, X-Powered-By, X-Generator headers + <meta name="generator">)
+  2. Cookie flags              (Secure, HttpOnly, SameSite)
+  3. HTTP -> HTTPS redirect
+  4. Exposed sensitive files   (.env, .git, .DS_Store, server-status, phpinfo)
+       Only 6 GET requests. A file counts as exposed only if its CONTENT matches,
+       so sites that answer every path with "200 OK" don't cause false positives.
+  5. HTML checks               (directory listing, mixed content, insecure forms,
+                                password field on an unencrypted page)
+"""
 import re
-import requests
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin
+
+import requests
 from bs4 import BeautifulSoup
+
 from scanner.fetch import REQUEST_HEADERS
 from scanner.validator import validate_target, TargetError
 
 TIMEOUT = 5
+VERSION_PATTERN = re.compile(r"\d+\.\d+|/\d")  # "2.4.41", "nginx/1", "PHP/7"
 
 
 def _finding(title, severity, description, recommendation=""):
@@ -20,23 +35,28 @@ def _names(items, limit=8):
 
 
 # ---------- 1) Technology / version leaks ----------
-def check_info_leaks(headers):
+def check_info_leaks(headers, soup):
     leaks = []
     server = headers.get("Server", "")
-    if server and re.search(r"\d", server):
+    if server and VERSION_PATTERN.search(server):
         leaks.append(f"Server: {server}")
-    for name in ("X-Powered-By", "X-AspNet-Version", "X-AspNetMvc-Version"):
+    for name in ("X-Powered-By", "X-AspNet-Version", "X-AspNetMvc-Version", "X-Generator"):
         if headers.get(name):
             leaks.append(f"{name}: {headers[name]}")
+
+    generator = soup.find("meta", attrs={"name": re.compile(r"^generator$", re.I)})
+    content = (generator.get("content") or "").strip() if generator else ""
+    if content and VERSION_PATTERN.search(content):
+        leaks.append(f'<meta name="generator" content="{content[:80]}">')
 
     if leaks:
         return [_finding(
             "Server reveals technology or version", "low",
             "Attackers can look up known vulnerabilities for these exact versions: " + "; ".join(leaks),
-            "Hide version numbers (e.g. 'server_tokens off' in Nginx, 'ServerTokens Prod' in Apache) "
-            "and remove X-Powered-By.")]
-    return [_finding("No version leaks in headers", "pass",
-                     "The server doesn't reveal software versions.")]
+            "Hide version numbers (e.g. 'server_tokens off' in Nginx, 'ServerTokens Prod' in Apache), "
+            "remove X-Powered-By and the generator meta tag.")]
+    return [_finding("No version leaks found", "pass",
+                     "The server and page don't reveal software versions.")]
 
 
 # ---------- 2) Cookie flags ----------
@@ -78,7 +98,7 @@ def check_cookies(set_cookies, is_https):
     return findings
 
 
-# ---------- 3) HTTP → HTTPS redirect ----------
+# ---------- 3) HTTP -> HTTPS redirect ----------
 def check_https_redirect(target):
     http_url = f"http://{target['host']}/"
     try:
@@ -111,7 +131,7 @@ SENSITIVE_FILES = [
      lambda b: not _is_html(b) and re.search(rb"(?m)^[A-Z][A-Z0-9_]*=", b)),
     ("/.git/HEAD", "Git repository is exposed (.git)",
      "Attackers can download the full source code, history and any secrets in it.",
-     lambda b: b.startswith(b"ref: refs/")),
+     lambda b: b.startswith(b"ref: refs/") or re.fullmatch(rb"[0-9a-f]{40}\s*", b)),
     ("/.git/config", "Git config is exposed (.git/config)",
      "Reveals repository details and sometimes credentials.",
      lambda b: b"[core]" in b and not _is_html(b)),
@@ -157,10 +177,13 @@ def check_exposed_files(base_url):
     return findings
 
 
-# ---------- 5) HTML: directory listing, mixed content, insecure forms ----------
-def check_html(html, final_url):
+# ---------- 5) HTML checks ----------
+def _insecure(value):
+    return (value or "").strip().lower().startswith("http://")
+
+
+def check_html(soup, final_url):
     findings = []
-    soup = BeautifulSoup(html, "html.parser")
 
     title = (soup.title.string or "") if soup.title else ""
     if title.strip().lower().startswith("index of /"):
@@ -169,18 +192,22 @@ def check_html(html, final_url):
             "The server shows a list of files, which can reveal private or backup files.",
             "Disable directory listing (e.g. 'Options -Indexes' in Apache, 'autoindex off' in Nginx)."))
 
+    # Password field on a plain-HTTP page: login details travel unencrypted
     if not final_url.startswith("https://"):
+        if soup.find("input", attrs={"type": re.compile(r"^password$", re.I)}):
+            findings.append(_finding(
+                "Login form on an unencrypted page", "high",
+                "This page has a password field but is served over HTTP, so passwords are sent in plain text.",
+                "Serve the whole site over HTTPS, especially login pages."))
         return findings
 
-    def insecure(value):
-        return (value or "").strip().lower().startswith("http://")
-
-    active = [t["src"] for t in soup.find_all(["script", "iframe"], src=True) if insecure(t["src"])]
+    active = [t["src"] for t in soup.find_all(["script", "iframe", "embed"], src=True) if _insecure(t["src"])]
+    active += [t["data"] for t in soup.find_all("object", data=True) if _insecure(t["data"])]
     active += [t["href"] for t in soup.find_all("link", href=True)
-               if "stylesheet" in [r.lower() for r in (t.get("rel") or [])] and insecure(t["href"])]
+               if "stylesheet" in [r.lower() for r in (t.get("rel") or [])] and _insecure(t["href"])]
     passive = [t["src"] for t in soup.find_all(["img", "audio", "video", "source"], src=True)
-               if insecure(t["src"])]
-    forms = [f["action"] for f in soup.find_all("form", action=True) if insecure(f["action"])]
+               if _insecure(t["src"])]
+    forms = [f["action"] for f in soup.find_all("form", action=True) if _insecure(f["action"])]
 
     if active:
         findings.append(_finding(
@@ -207,11 +234,13 @@ def check_html(html, final_url):
 # ---------- Run all ----------
 def check_misconfig(target, page, has_https):
     is_https = page["final_url"].startswith("https://")
+    soup = BeautifulSoup(page["html"], "html.parser")  # parsed once, used by two checks
+
     findings = []
-    findings += check_info_leaks(page["headers"])
+    findings += check_info_leaks(page["headers"], soup)
     findings += check_cookies(page["set_cookies"], is_https)
     if has_https:
         findings += check_https_redirect(target)
     findings += check_exposed_files(page["final_url"])
-    findings += check_html(page["html"], page["final_url"])
+    findings += check_html(soup, page["final_url"])
     return findings
