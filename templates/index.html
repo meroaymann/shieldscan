@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShieldScan – Website Security Scanner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script>
+    try { if (localStorage.getItem("theme") === "dark") document.documentElement.dataset.theme = "dark"; } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="navbar">
+    <div class="container nav-inner">
+      <a href="/" class="logo"><span class="logo-icon">🛡️</span><span>Shield<span class="accent">Scan</span></span></a>
+      <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode">🌙</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container">
+        <span class="badge">Passive · Safe · Non-intrusive</span>
+        <h1>Check your website's <span class="accent">security</span> in seconds</h1>
+        <p class="subtitle">
+          ShieldScan checks security headers, SSL/TLS and common misconfigurations,
+          then gives you a security score with clear, practical fixes.
+        </p>
+
+        <form id="scanForm" class="scan-card" novalidate>
+          <div class="input-row">
+            <span class="input-prefix">🌐</span>
+            <input type="text" id="urlInput" placeholder="example.com"
+                   autocomplete="off" spellcheck="false" aria-label="Website URL">
+            <button type="submit" id="scanBtn" class="btn-primary">
+              <span class="btn-text">Scan</span>
+              <span class="spinner" hidden></span>
+            </button>
+          </div>
+          <label class="auth-check">
+            <input type="checkbox" id="authCheck">
+            <span>I own this website or have permission to test it.</span>
+          </label>
+          <p id="formError" class="form-error" role="alert" hidden></p>
+        </form>
+      </div>
+    </section>
+
+    <section id="results" class="container results" hidden>
+      <div class="print-title">🛡️ ShieldScan Security Report</div>
+      <div class="results-head">
+        <div>
+          <h2>Scan Results</h2>
+          <p class="muted" id="scannedUrl"></p>
+        </div>
+        <div class="actions">
+          <button type="button" id="csvBtn" class="btn-secondary">⬇ CSV</button>
+          <button type="button" id="pdfBtn" class="btn-secondary">📄 PDF</button>
+          <button type="button" id="newScanBtn" class="btn-secondary">↻ New scan</button>
+        </div>
+      </div>
+
+      <div class="summary-grid">
+        <div class="card score-card">
+          <div class="gauge">
+            <svg viewBox="0 0 120 120">
+              <circle class="gauge-bg" cx="60" cy="60" r="52"/>
+              <circle class="gauge-fill" id="gaugeFill" cx="60" cy="60" r="52"/>
+            </svg>
+            <div class="gauge-text">
+              <span id="scoreValue">0</span>
+              <small>/ 100</small>
+            </div>
+          </div>
+          <div class="grade-badge" id="gradeBadge"></div>
+          <p class="score-summary" id="scoreSummary"></p>
+        </div>
+
+        <div class="card">
+          <h3>Issues by severity</h3>
+          <div class="severity-counts" id="severityCounts"></div>
+          <h3 class="mt">Category scores</h3>
+          <div id="categoryBars"></div>
+        </div>
+
+        <div class="card">
+          <h3>🔒 SSL / TLS</h3>
+          <dl class="ssl-info" id="sslInfo"></dl>
+        </div>
+      </div>
+
+      <!-- NEW: charts -->
+      <div class="card charts-card">
+        <div>
+          <h3>Results breakdown</h3>
+          <div class="chart-wrap"><canvas id="severityChart"></canvas></div>
+        </div>
+        <div>
+          <h3>Issues vs passed per category</h3>
+          <div class="chart-wrap"><canvas id="categoryChart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="findings-head">
+          <h3>Findings</h3>
+          <div class="filters" id="filters">
+            <button type="button" class="filter active" data-filter="all">All</button>
+            <button type="button" class="filter" data-filter="issues">Issues</button>
+            <button type="button" class="filter" data-filter="pass">Passed</button>
+            <button type="button" class="filter" data-filter="ports">Ports</button>
+          </div>
+        </div>
+        <div id="findingsList"></div>
+      </div>
+    </section>
+
+    <section class="container features">
+      <h2>What ShieldScan checks</h2>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">📋</div>
+          <h3>Security Headers</h3>
+          <p>CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy and more.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔒</div>
+          <h3>SSL / TLS</h3>
+          <p>HTTPS support, certificate validity, expiry date and TLS version.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">⚙️</div>
+          <h3>Misconfigurations</h3>
+          <p>Server version leaks, insecure cookies, HTTP→HTTPS redirect and exposed files.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🚪</div>
+          <h3>Common Ports</h3>
+          <p>A light check of 10 risky ports (databases, Telnet, FTP, RDP). Runs in the local version only.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📊</div>
+          <h3>Security Score</h3>
+          <p>A 0–100 score and an A–F grade, with every issue ranked by severity.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📄</div>
+          <h3>Reports</h3>
+          <p>Download your results as a PDF or CSV report.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>⚠️ Only scan websites you own or have permission to test. ShieldScan runs passive checks only.</p>
+      <p class="muted">Built by Amira Ayman · Sqrock IT Solutions Internship</p>
+    </div>
+  </footer>
+
+  <!-- NEW: Chart.js (must load before main.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
